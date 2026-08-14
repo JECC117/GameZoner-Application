@@ -1,0 +1,64 @@
+==============================================================================
+NOTA TÉCNICA: MUTACIÓN DE OBJETOS POR REFERENCIA Y BINDING EN EF CORE
+==============================================================================
+
+1. CONCEPTO CLAVE EN C# (TIPOS POR REFERENCIA)
+------------------------------------------------------------------------------
+En C#, las instancias de clases son tipos por referencia (Reference Types). 
+Cuando asignamos un objeto a una variable o lo pasamos como argumento a un 
+método, no estamos copiando el objeto en sí, sino creando un puntero que 
+apunta a la misma dirección dentro de la memoria Heap.
+
+Cualquier proceso o librería que modifique las propiedades de esa instancia 
+está alterando directamente ese bloque de memoria, afectando a todas las 
+variables que apunten a dicha referencia.
+
+2. COMPORTAMIENTO CON ENTITY FRAMEWORK CORE (CHANGE TRACKER)
+------------------------------------------------------------------------------
+Al agregar una entidad al contexto mediante un método de registro:
+
+    _context.Usuarios.Add(nuevoUsuario);
+
+EF Core suscribe el objeto en su Change Tracker (Rastreador de Cambios) bajo el 
+estado "Added". En este punto en memoria RAM, la propiedad de clave primaria 
+(ej. Id) suele valer su valor por defecto (0 para numéricos o Empty para GUIDs).
+
+3. INYECCIÓN DE VALORES TRAS PERSISTENCIA (SaveChangesAsync)
+------------------------------------------------------------------------------
+Cuando se ejecuta el comando de guardado:
+
+    await _context.SaveChangesAsync();
+
+Ocurre la siguiente secuencia en segundo plano:
+  a. EF Core traduce el estado en memoria a una sentencia SQL (INSERT INTO...).
+  b. El motor de Base de Datos procesa la inserción y asigna la clave primaria 
+     autoincremental (Identity).
+  c. La Base de Datos retorna dicho identificador a EF Core.
+  d. EF Core muta (actualiza) directamente la propiedad Id de la MISA instancia 
+     de objeto que ya vivía en la memoria RAM de nuestra aplicación C#.
+
+4. IMPLICACIONES PRÁCTICAS EN EL MAPEO Y RETORNO (AutoMapper)
+------------------------------------------------------------------------------
+Debido a esta mutación por referencia, el orden en que se mapea de la Entidad 
+al DTO de salida es crítico:
+
+  [INCORRECTO]
+  var nuevoUsuario = Mapeador.Map<Usuario>(dto);
+  _context.Usuarios.Add(nuevoUsuario);
+  var resultadoDTO = Mapeador.Map<UsuarioDTO>(nuevoUsuario); // Id aún vale 0
+  await _context.SaveChangesAsync(); 
+  return resultadoDTO; // Retorna DTO con Id en 0
+
+  [CORRECTO]
+  var nuevoUsuario = Mapeador.Map<Usuario>(dto);
+  _context.Usuarios.Add(nuevoUsuario);
+  await _context.SaveChangesAsync(); // EF Core muta nuevoUsuario.Id en memoria
+  var resultadoDTO = Mapeador.Map<UsuarioDTO>(nuevoUsuario); // Lee el Id generado
+  return resultadoDTO; // Retorna DTO con el Id real de la BD
+
+REGLA GENERAL:
+Si un método o servicio requiere retornar la representación de una entidad 
+recién creada que depende de identificadores o valores autogenerados por el 
+servidor de base de datos, el mapeo o lectura hacia el DTO de respuesta DEBE 
+realizarse estrictamente DESPUÉS de invocar SaveChangesAsync().
+==============================================================================

@@ -1,0 +1,118 @@
+﻿====================================================================
+  GUÍA DE REFERENCIA: ARQUITECTURA DE RELACIONES (M:N) - GAMEZONE
+====================================================================
+
+1. CONCEPTO CLAVE: ENTIDAD TRANSACCIONAL
+--------------------------------------------------------------------
+Para conectar 'Juego' y 'Empresa', no usamos una tabla intermedia
+"burda" o invisible. Creamos una ENTIDAD TRANSACCIONAL explícita 
+(JuegoEmpresa) que almacena la información propia de la relación.
+
+La cardinalidad Muchos a Muchos (M:N) se fragmenta en dos 
+relaciones Uno a Muchos (1:N):
+
+  [ Juego ] 1 <-----> N [ JuegoEmpresa ] N <-----> 1 [ Empresa ]
+
+--------------------------------------------------------------------
+2. DEFINICIÓN DE LOS MODELOS (C#)
+--------------------------------------------------------------------
+
+A. Modelo Independiente: Empresa.cs
+-----------------------------------
+namespace GameZone.Modelos
+{
+    public class Empresa
+    {
+        public long Id { get; set; }
+        public string Nombre { get; set; } = string.Empty;
+        public string SitioWeb { get; set; } = string.Empty;
+
+        // Propiedad de Navegación (Contrato ICollection)
+        public ICollection<JuegoEmpresa> JuegosAsociados { get; set; } = new List<JuegoEmpresa>();
+    }
+}
+
+B. Modelo Independiente: Juego.cs
+---------------------------------
+namespace GameZone.Modelos
+{
+    public class Juego
+    {
+        public long Id { get; set; }
+        public string Titulo { get; set; } = string.Empty;
+
+        // Propiedad de Navegación (Contrato ICollection)
+        public ICollection<JuegoEmpresa> EmpresasAsociadas { get; set; } = new List<JuegoEmpresa>();
+    }
+}
+
+C. Entidad Transaccional: JuegoEmpresa.cs
+-----------------------------------------
+namespace GameZone.Modelos
+{
+    public class JuegoEmpresa
+    {
+        // 1. Clave Foránea a Juego
+        public long JuegoId { get; set; }
+        public Juego Juego { get; set; } = null!; // Navegación
+
+        // 2. Clave Foránea a Empresa
+        public long EmpresaId { get; set; }
+        public Empresa Empresa { get; set; } = null!; // Navegación
+
+        // 3. Atributo propio del contrato / relación
+        public string Rol { get; set; } = string.Empty;
+    }
+}
+
+--------------------------------------------------------------------
+3. CONFIGURACIÓN EN DBCONTEXT (FLUENT API)
+--------------------------------------------------------------------
+Para la siguiente fase en DbContext, se debe configurar la llave 
+compuesta y las relaciones 1:N en el método OnModelCreating:
+
+protected override void OnModelCreating(ModelBuilder modelBuilder)
+{
+    base.OnModelCreating(modelBuilder);
+
+    // Llave primaria compuesta para la tabla intermedia
+    modelBuilder.Entity<JuegoEmpresa>()
+        .HasKey(je => new { je.JuegoId, je.EmpresaId, je.Rol });
+
+    // Relación 1:N con Juego
+    modelBuilder.Entity<JuegoEmpresa>()
+        .HasOne(je => je.Juego)
+        .WithMany(j => j.EmpresasAsociadas)
+        .HasForeignKey(je => je.JuegoId);
+
+    // Relación 1:N con Empresa
+    modelBuilder.Entity<JuegoEmpresa>()
+        .HasOne(je => je.Empresa)
+        .WithMany(e => e.JuegosAsociados)
+        .HasForeignKey(je => je.EmpresaId);
+}
+
+--------------------------------------------------------------------
+4. REGLAS DE ORO A RECORDAR
+--------------------------------------------------------------------
+1. Usar siempre 'ICollection<T>' en las propiedades de navegación de 
+   los extremos para permitir que EF Core inyecte sus colecciones 
+   optimizadas en memoria (HashSet).
+2. Inicializar con '= new List<T>()' para evitar fallos de referencia 
+   nula (NullReferenceException) al instanciar.
+3. '= null!;' indica al compilador que EF Core se encargará de 
+   poblar las propiedades de navegación durante las consultas.
+
+--------------------------------------------------------------------
+P.D. (POSTDATA) - PRINCIPIO DE INVOCACIÓN DE INTERFACES EN C#
+--------------------------------------------------------------------
+Al invocar una Interfaz (como ICollection<T>), la regla de oro es:
+"Declaro el contrato que exijo hacia afuera, pero utilizo cualquier 
+implementación concreta (como una 'new List<T>()') para cumplirlo 
+por dentro".
+
+- Lado izquierdo (ICollection): Define la promesa y el nivel de 
+  abstracción que verá el resto del sistema y EF Core.
+- Lado derecho (new List()): Es la herramienta física con la que 
+  inicializas la propiedad en memoria RAM para cumplir ese contrato.
+====================================================================

@@ -1,0 +1,297 @@
+MANUAL DE ARQUITECTURA Y CONFIGURACIÓN - BACKEND (.NET CORE)
+ÍNDICE
+
+Cadena de Conexión y DbContext (Persistencia)
+
+Arquitectura de 3 Capas (Controlador -> Servicio -> Interfaz)
+
+Autenticación, JWT y BCrypt (Seguridad)
+
+Verificador de Claims (Autorización Contextual)
+
+Configuración Global (Program.cs)
+
+1. CADENA DE CONEXIÓN Y DBCONTEXT (Persistencia)
+Funcionamiento y Ventajas
+Entity Framework Core (EF Core) actúa como nuestro ORM (Mapeador Objeto-Relacional). En lugar de escribir sentencias SQL manuales, operamos con objetos de C#. La cadena de conexión almacena las credenciales de la base de datos de forma segura (fuera del código fuente) y el DbContext actúa como el puente principal entre nuestra API y SQL.
+
+Ventajas:
+
+Seguridad: Las credenciales viven en la configuración del entorno, no "quemadas" en el código.
+
+Productividad: Consultas complejas se resuelven con métodos LINQ (ToListAsync(), FindAsync()).
+
+Implementación
+A. appsettings.json
+
+JSON
+{
+  "ConnectionStrings": {
+    "ConexionSQL": "Server=TU_SERVIDOR;Database=GameZoneDB;User Id=TU_USUARIO;Password=TU_PASSWORD;TrustServerCertificate=True;"
+  }
+}
+B. ApplicationDbContext.cs
+
+C#
+using Microsoft.EntityFrameworkCore;
+using GameZone.Modelos;
+
+namespace GameZone.Datos
+{
+    public class ApplicationDbContext : DbContext
+    {
+        public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options) : base(options) { }
+
+        // Representación de las tablas en la Base de Datos
+        public DbSet<Usuario> Usuarios { get; set; }
+    }
+}
+2. ARQUITECTURA DE 3 CAPAS (Interfaces, Servicios y Controladores)
+Funcionamiento y Ventajas
+Hemos abandonado el patrón de "Controladores Gordos". Ahora dividimos la responsabilidad:
+
+Interfaz (El Contrato): Define los métodos disponibles sin importar cómo funcionan.
+
+Servicio (La Lógica): Contiene las reglas de negocio (EF Core, AutoMapper, validaciones). NO sabe nada de HTTP ni de ActionResult.
+
+Controlador (La Web): Solo recibe peticiones HTTP, llama al Servicio y devuelve códigos HTTP (200 OK, 400 BadRequest).
+
+Ventajas:
+
+Código Limpio: Cada archivo hace una sola cosa.
+
+Manejo de Errores Centralizado: El servicio lanza throw new InvalidOperationException(...) y el controlador lo atrapa.
+
+Implementación
+A. La Interfaz (IUsuarioServicio.cs)
+
+C#
+namespace GameZone.Interfaces
+{
+    public interface IUsuarioServicio
+    {
+        Task<IEnumerable<UsuarioDTO>> ObtenerTodosAsync();
+        Task<UsuarioDTO> CrearUsuarioAsync(UsuarioDTO usuarioDTO);
+        Task EliminarUsuarioAsync(long id); // No retorna nada (Equivale a HTTP 204)
+    }
+}
+B. El Servicio (UsuarioServicio.cs)
+
+C#
+using GameZone.Interfaces;
+// ... (usings de EF, AutoMapper)
+
+namespace GameZone.Servicios
+{
+    public class UsuarioServicio : IUsuarioServicio
+    {
+        private readonly ApplicationDbContext _context;
+        private readonly IMapper _mapper;
+
+        public UsuarioServicio(ApplicationDbContext context, IMapper mapper)
+        {
+            _context = context;
+            _mapper = mapper;
+        }
+
+        public async Task EliminarUsuarioAsync(long id)
+        {
+            var usuario = await _context.Usuarios.FindAsync(id);
+            if (usuario == null)
+            {
+                // La lógica interrumpe el flujo, el controlador decidirá el código HTTP
+                throw new InvalidOperationException("El usuario a eliminar no existe.");
+            }
+
+            _context.Usuarios.Remove(usuario);
+            await _context.SaveChangesAsync();
+        }
+        
+        // ... Implementación del resto de métodos
+    }
+}
+C. El Controlador (UsuariosController.cs)
+
+C#
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
+// ...
+
+namespace GameZone.Controladores
+{
+    [ApiController]
+    [Route("api/[controller]")]
+    public class UsuariosController : ControllerBase
+    {
+        private readonly IUsuarioServicio _usuarioServicio;
+
+        public UsuariosController(IUsuarioServicio usuarioServicio)
+        {
+            _usuarioServicio = usuarioServicio; // Inyección de Dependencias
+        }
+
+        [HttpDelete("{id}")]
+        [Authorize] // Exige Token JWT válido
+        public async Task<IActionResult> EliminarUsuario(long id)
+        {
+            try
+            {
+                await _usuarioServicio.EliminarUsuarioAsync(id);
+                return NoContent(); // HTTP 204
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { mensaje = ex.Message }); // HTTP 400
+            }
+        }
+    }
+}
+3. AUTENTICACIÓN, JWT Y BCRYPT
+Funcionamiento y Ventajas
+No guardamos contraseñas en texto plano, usamos BCrypt para aplicar un hash irreversible. Cuando el usuario se autentica, generamos un JSON Web Token (JWT) que contiene sus Claims (ID, Email, Rol). El atributo [Authorize] valida la firma criptográfica de este token en peticiones futuras.
+
+Ventajas:
+
+Seguridad de contraseñas extrema gracias al "salting" automático de BCrypt.
+
+APIs "Stateless" (Sin estado). El servidor no necesita guardar sesiones; toda la identidad viaja en el JWT.
+
+Implementación (Lógica de Login en el Servicio)
+C#
+public async Task<string> LoginUsuarioAsync(UsuarioDTO usuarioDTO)
+{
+    var usuario = await _context.Usuarios.FirstOrDefaultAsync(u => u.CorreoElectronico == usuarioDTO.CorreoElectronicoDTO);
+
+    if (usuario == null)
+        throw new InvalidOperationException("Credenciales incorrectas.");
+
+    // Verificación con BCrypt
+    bool contrasenaValida = BCrypt.Net.BCrypt.EnhancedVerify(usuarioDTO.PasswordDTO, usuario.PasswordEncriptada);
+    
+    if (!contrasenaValida)
+        throw new InvalidOperationException("Credenciales incorrectas.");
+
+    // Se asume la existencia de un servicio generador de JWT
+    return _tokenServicio.GenerarToken(usuario); 
+}
+4. VERIFICADOR DE CLAIMS (Current User Service)
+Funcionamiento y Ventajas
+Extrae los datos del usuario logueado (Claims) directamente desde el contexto de la petición web (HttpContext). Al crear una Interfaz (InterfaceUsuario) y un Servicio (UsuarioActualAutorizadorServicio) para esto, abstraemos la lectura del Token.
+
+Ventajas:
+
+Cero acoplamiento: Permite a la capa de Servicios de Negocio conocer la identidad del usuario y sus permisos sin tocar ni un controlador.
+
+Permite validaciones robustas como: "El ID del Token debe coincidir con el ID del recurso a eliminar".
+
+Implementación
+A. La Clase Verificadora (UsuarioActualAutorizadorServicio.cs)
+
+C#
+using System.Security.Claims;
+using Microsoft.AspNetCore.Http;
+using GameZone.Interfaces;
+
+namespace GameZone.Servicios
+{
+    public class UsuarioActualAutorizadorServicio : InterfaceUsuario
+    {
+        private readonly IHttpContextAccessor _contextAccessor;
+
+        public UsuarioActualAutorizadorServicio(IHttpContextAccessor httpContextAccessor)
+        {
+            _contextAccessor = httpContextAccessor;
+        }
+
+        public bool IsAutenticated => 
+            _contextAccessor.HttpContext?.User?.Identity?.IsAuthenticated ?? false;
+
+        public long? Id_Usuario
+        {
+            get
+            {
+                var claim = _contextAccessor.HttpContext?.User?.FindFirst(ClaimTypes.NameIdentifier);
+                return long.TryParse(claim?.Value, out long id) ? id : null;
+            }
+        }
+
+        public string? Rol_Usuario => 
+            _contextAccessor.HttpContext?.User?.FindFirst(ClaimTypes.Role)?.Value;
+
+        public bool TieneRolValido(string rol) => 
+            _contextAccessor.HttpContext?.User?.IsInRole(rol) ?? false;
+    }
+}
+B. Ejemplo de Uso (Dentro de un Servicio de Negocio)
+
+C#
+// Validación de permisos sin controlador
+long idUsuarioConectado = _usuarioActual.Id_Usuario ?? throw new InvalidOperationException("Token inválido.");
+bool esAdmin = _usuarioActual.TieneRolValido("Admin");
+
+if (idUsuarioConectado != idObjetivo && !esAdmin)
+{
+    throw new InvalidOperationException("No tienes permisos para modificar este recurso.");
+}
+5. CONFIGURACIÓN GLOBAL (Program.cs)
+Aquí es donde ensamblamos y conectamos todas las piezas (Inyección de Dependencias, Contextos, JWT y AutoMapper) para que .NET construya el backend.
+
+C#
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
+using GameZone.Datos;
+using GameZone.Interfaces;
+using GameZone.Servicios;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// 1. CONFIGURAR LA BASE DE DATOS (DbContext)
+builder.Services.AddDbContext<ApplicationDbContext>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("ConexionSQL")));
+
+// 2. CONFIGURAR AUTOMAPPER
+builder.Services.AddAutoMapper(typeof(Program));
+
+// 3. INYECCIÓN DE DEPENDENCIAS (Contratos -> Clases)
+builder.Services.AddHttpContextAccessor(); // Obligatorio para leer el contexto del token
+builder.Services.AddScoped<InterfaceUsuario, UsuarioActualAutorizadorServicio>();
+builder.Services.AddScoped<IUsuarioServicio, UsuarioServicio>();
+// Agregar aquí los demás servicios a medida que el proyecto crezca...
+
+// 4. CONFIGURAR JWT (Seguridad y [Authorize])
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]!)),
+            ValidateIssuer = false,
+            ValidateAudience = false,
+            ValidateLifetime = true // Exige que el token no haya expirado
+        };
+    });
+
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+var app = builder.Build();
+
+// 5. TUBERÍA DE PETICIONES (Middlewares)
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseHttpsRedirection();
+
+app.UseAuthentication(); // <- Muro de Identidad (Revisa el JWT)
+app.UseAuthorization();  // <- Muro de Permisos (Revisa los Roles/Claims)
+
+app.MapControllers();
+
+app.Run();
