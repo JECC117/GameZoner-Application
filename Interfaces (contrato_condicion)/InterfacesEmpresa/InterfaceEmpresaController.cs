@@ -5,7 +5,7 @@ namespace GameZone.Interfaces__contrato_condicion_.InterfacesEmpresa
 {
     public interface InterfaceEmpresaController
     {
-        Task<IEnumerable<EmpresaDTO>?> ObtenerTodasLasEmpresas();
+        Task<IEnumerable<EmpresaDTO?>?> ObtenerTodasLasEmpresas();
         Task<EmpresaDTO?> ObtenerEmpresaPorId(long id);
         Task<EmpresaDTO> RegistrarEmpresa(EmpresaDTO empresaDTO);
         Task<string> InicioSesionEmpresa(EmpresaDTO empresaDTO);

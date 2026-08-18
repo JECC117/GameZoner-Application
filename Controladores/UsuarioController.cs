@@ -2,7 +2,6 @@
 using GameZone.Interfaces__contrato_condicion_.InterfacesUsuario;
 using GameZone.Modelos.Usuario;
 using Microsoft.AspNetCore.Authorization;
-using GameZone.Modelos.Empresa;
 
 
 namespace GameZone.Controladores
@@ -54,6 +53,18 @@ namespace GameZone.Controladores
             {
                 return BadRequest(ex.Message);
             }
+        }
+
+        //Login
+        [HttpPost]
+        public async Task<ActionResult<string>> LoginUsuario(UsuarioDTO usuarioDTO)
+        {
+            var Token= await _interfaceUsuarioController.LoginUsuario(usuarioDTO);
+            if( Token == null)
+            {
+                return NotFound();
+            }
+            return Ok(Token);
         }
 
         [HttpPut("EditarUsuario/{id}")]

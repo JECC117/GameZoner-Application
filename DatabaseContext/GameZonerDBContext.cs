@@ -19,7 +19,6 @@ namespace GameZone.DatabaseContext
         public DbSet<Usuario> Usuarios { get; set; }
 
         public DbSet<Empresa> Empresas { get; set; }
-
         //Como UsuarioDTO NO es una tabla en nuestra base de datos, No se declara, C# Puede acceder a los otros modelos simplemente trayendo a la carpeta de modelos. En DB context solo se añaden los modelos que serán tablas en SQL
 
     }

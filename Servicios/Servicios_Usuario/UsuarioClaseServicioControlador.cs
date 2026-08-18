@@ -1,8 +1,10 @@
 ﻿using AutoMapper;
 using GameZone.DatabaseContext;
+using GameZone.Interfaces__contrato_condicion_.InterfacesRepositorios;
 using GameZone.Interfaces__contrato_condicion_.InterfacesToken;
 using GameZone.Interfaces__contrato_condicion_.InterfacesUsuario;
 using GameZone.Modelos.Usuario;
+using GameZone.Servicios.Repositorios;
 using GameZone.Servicios.Token;
 using Microsoft.EntityFrameworkCore;
 
@@ -10,14 +12,14 @@ namespace GameZone.Servicios.Servicios_Usuario
 {
     public class UsuarioClaseServicioControlador : InterfaceUsuarioController
     {
-        private readonly GameZonerDBContext _ContextHeredado;
+        private readonly InterfaceUsuarioRepositorio _Repository;
         private readonly IMapper Mapeador; //Se maneja para la inyeccion del automapper
         private readonly InterfaceTokenService _TokenUsuarioInterface;
         private readonly InterfaceUsuarioClaims _UsuarioClaimsVerificacion; //AL INVOCAR LA INTERFAZ, TENGO ACCESO A LOS METODOS DE LAS CLASES QUE HAYAN INVOCADO A ESTA INTERFAZ (Que haya sido definida en AddScoped), Ejemplo: builder.Services.AddScoped<InterfaceUsuario, UsuarioActualAutorizadorServicio>();
 
-        public UsuarioClaseServicioControlador(GameZonerDBContext contextHeredado, IMapper mapeador, InterfaceTokenService tokenUsuarioInterface, InterfaceUsuarioClaims interfaceUsuario) //Se genera una "instancia" tanto de DBContext y TokenUsuarioClass ya que en cada petición HTTP se construyen estos servicios y la instancia se genera en ese momento, mediante el constructor se captura esa instancia. 
+        public UsuarioClaseServicioControlador(InterfaceUsuarioRepositorio RepositoryInstanciado, IMapper mapeador, InterfaceTokenService tokenUsuarioInterface, InterfaceUsuarioClaims interfaceUsuario) //Se genera una "instancia" tanto de DBContext y TokenUsuarioClass ya que en cada petición HTTP se construyen estos servicios y la instancia se genera en ese momento, mediante el constructor se captura esa instancia. 
         {
-            _ContextHeredado=contextHeredado;
+            _Repository=RepositoryInstanciado;
             Mapeador=mapeador;
             _TokenUsuarioInterface=tokenUsuarioInterface;
             _UsuarioClaimsVerificacion= interfaceUsuario;
@@ -26,8 +28,8 @@ namespace GameZone.Servicios.Servicios_Usuario
         //Metodos de Clase (ActionResult y por ende, Ok, BadRequest y similares) SON PROPIOS DE CONTROLADOR API
         public async Task<IEnumerable<UsuarioDTO>?> ObtenerTodosLosUsuarios() //Para las colecciones IEnumerable no se maneja ? para los objetos
         {
-            var UsuariosCompletos = await _ContextHeredado.Usuarios.ToListAsync();
-            if (UsuariosCompletos.Count > 0)
+            var UsuariosCompletos = await _Repository.ObtenerTodosLosUsuariosRepo();
+            if (UsuariosCompletos.Any())
             {
                 var UsuariosDTO = Mapeador.Map<IEnumerable<UsuarioDTO>>(UsuariosCompletos); //Si, los Mappers pueden mapear una lista entera, usando IEnumerable como interfaz
                 //Algo a recalcar: Uso la sintaxis <IEnumerable<UsuarioDTO>> por comodidad. A nivel de procesos, NET genera un instanciamiento de una lista (pero sin los permisos de edicion de una lista directamente instancianda con <List<), NET genera una lista porque es la estructura de datos mas sencilla de instanciar y manipular. Instanciando un objeto DTO para cada objeto completo para finalmente agregar los DTO a esa nueva lista con solo permisos de lectura.
@@ -39,7 +41,7 @@ namespace GameZone.Servicios.Servicios_Usuario
 
         public async Task<UsuarioDTO?> ObtenerUsuarioPorId(long id)
         {
-            var UsuarioBuscado = await _ContextHeredado.Usuarios.FindAsync(id);
+            var UsuarioBuscado = await _Repository.ObtenerUsuarioPorIdRepo(id);
             if (UsuarioBuscado != null)
             {
                 var UsuarioBuscadoDTO = Mapeador.Map<UsuarioDTO>(UsuarioBuscado);
@@ -52,8 +54,8 @@ namespace GameZone.Servicios.Servicios_Usuario
 
         public async Task<UsuarioDTO> CrearUsuario(UsuarioDTO usuarioDTO)
         {
-            bool CorreoDuplicado = await _ContextHeredado.Usuarios.AnyAsync(ObjetoActualEnTablaUsuarios => ObjetoActualEnTablaUsuarios.CorreoElectronico == usuarioDTO.CorreoElectronicoDTO);
-            bool AliasDuplicado = await _ContextHeredado.Usuarios.AnyAsync(ObjetoActualEnTablaUsuarios => ObjetoActualEnTablaUsuarios.AliasUsuario == usuarioDTO.AliasUsuarioDTO);
+            bool CorreoDuplicado = await _Repository.CorreoDuplicado(usuarioDTO);
+            bool AliasDuplicado = await _Repository.AliasDuplicado(usuarioDTO);
 
             if (AliasDuplicado==true && CorreoDuplicado==true)
             {
@@ -66,11 +68,11 @@ namespace GameZone.Servicios.Servicios_Usuario
             }
 
             var NuevoUsuario = Mapeador.Map<Usuario>(usuarioDTO);
-            _ContextHeredado.Usuarios.Add(NuevoUsuario);
+            _Repository.CrearUsuarioRepo(NuevoUsuario);
      
             try
             {
-                await _ContextHeredado.SaveChangesAsync();
+                await _Repository.GuardarCambiosAsyncRepo();
 
             }
             catch (DbUpdateException)
@@ -86,7 +88,7 @@ namespace GameZone.Servicios.Servicios_Usuario
         //Login
         public async Task<string> LoginUsuario(UsuarioDTO usuarioDTO)
         {
-            var UsuarioExistente = await _ContextHeredado.Usuarios.FirstOrDefaultAsync(ObjetoActualEnTablaUsuarios => ObjetoActualEnTablaUsuarios.CorreoElectronico == usuarioDTO.CorreoElectronicoDTO);
+            var UsuarioExistente = await _Repository.LoginUsuarioRepo(usuarioDTO);
 
             if (UsuarioExistente == null)
             {
@@ -123,7 +125,7 @@ namespace GameZone.Servicios.Servicios_Usuario
                 throw new InvalidOperationException("No se pudo detectar un valor de Id");
             }
 
-                var UsuarioEditar = await _ContextHeredado.Usuarios.FindAsync(id);
+            var UsuarioEditar = await _Repository.ObtenerUsuarioPorIdRepo(id);
 
             if (UsuarioEditar == null)
             {
@@ -134,7 +136,7 @@ namespace GameZone.Servicios.Servicios_Usuario
 
             try
             {
-                await _ContextHeredado.SaveChangesAsync();
+                await _Repository.GuardarCambiosAsyncRepo();
             }
             catch (DbUpdateException)
             {
@@ -158,18 +160,18 @@ namespace GameZone.Servicios.Servicios_Usuario
                 throw new InvalidOperationException("No se pudo obtener un valor de Id");
             }
 
-                var UsuarioEliminar = await _ContextHeredado.Usuarios.FindAsync(id);
+            var UsuarioEliminar = await _Repository.ObtenerUsuarioPorIdRepo(id);
 
             if (UsuarioEliminar == null)
             {
                 throw new InvalidOperationException("El usuario no existe");
             }
 
-            _ContextHeredado.Usuarios.Remove(UsuarioEliminar); //Se selecciona la Tabla en la que se desea hacer el Remove (ojito con eso). Porque tanto los metodos de Remove y Add asignan etiquetas a objetos en memoria, SaveChangesAsync es quien se encarga de realizar los cambios que alteran la base de datos
+            _Repository.EliminarUsuarioPorReferenciaRepo(UsuarioEliminar); //Se selecciona la Tabla en la que se desea hacer el Remove (ojito con eso). Porque tanto los metodos de Remove y Add asignan etiquetas a objetos en memoria, SaveChangesAsync es quien se encarga de realizar los cambios que alteran la base de datos
 
             try
             {
-                await _ContextHeredado.SaveChangesAsync(); //Se emplea SaveChangesAsync sin especificar las tablas, ya que estamos actualizando de forma general
+                await _Repository.GuardarCambiosAsyncRepo(); //Se emplea SaveChangesAsync sin especificar las tablas, ya que estamos actualizando de forma general
             }
             catch (DbUpdateException) {
 

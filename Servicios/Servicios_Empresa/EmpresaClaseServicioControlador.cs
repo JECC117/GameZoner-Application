@@ -5,29 +5,31 @@ using GameZone.Servicios.Token;
 using GameZone.Modelos.Empresa;
 using Microsoft.EntityFrameworkCore;
 using GameZone.Interfaces__contrato_condicion_.InterfacesToken;
+using GameZone.Interfaces__contrato_condicion_.InterfacesRepositorios;
 
 namespace GameZone.Servicios.Servicios_Empresa
 {
     public class EmpresaClaseServicioControlador : InterfaceEmpresaController
     {
         private readonly IMapper _mapper;
-        private readonly GameZonerDBContext _dbContext;
+        private readonly InterfaceEmpresaRepositorio _repositorio;
         private readonly InterfaceEmpresaValidarClaims _interfaceEmpresaValidarClaims;
         private readonly InterfaceTokenService _tokenEmpresaInterface;
+        
 
-        public EmpresaClaseServicioControlador(InterfaceEmpresaValidarClaims interfaceEmpresaClaims, IMapper Mapper, GameZonerDBContext gameZonerDBContext, InterfaceTokenService tokenService)
+        public EmpresaClaseServicioControlador(InterfaceEmpresaValidarClaims interfaceEmpresaClaims, IMapper Mapper, InterfaceEmpresaRepositorio interfaceEmpresaRepositorio, InterfaceTokenService tokenService)
         {
             _interfaceEmpresaValidarClaims=interfaceEmpresaClaims; //Pido la interfaz en el constructor (normalmente 
             _mapper=Mapper;
-            _dbContext=gameZonerDBContext; //Inyeccion de dependencias (Context) para mi clase
+            _repositorio=interfaceEmpresaRepositorio; //Inyeccion de dependencias (Context) para mi clase
             _tokenEmpresaInterface=tokenService; 
 
         }
 
-        public async Task<IEnumerable<EmpresaDTO>?> ObtenerTodasLasEmpresas()
+        public async Task<IEnumerable<EmpresaDTO?>?> ObtenerTodasLasEmpresas()
         {
-            var EmpresasCompletas = await _dbContext.Empresas.ToListAsync();
-            if (EmpresasCompletas.Count>0)
+            var EmpresasCompletas = await _repositorio.ObtenerTodasLasEmpresasRepo();
+            if (EmpresasCompletas.Any())
             {
                 var EmpresasADTO = _mapper.Map<IEnumerable<EmpresaDTO>>(EmpresasCompletas);  //Recordar que necesito mapear una coleccion, IEnumerable es la opcion mas indicada por su compatibilidad
                 return EmpresasADTO;
@@ -37,7 +39,7 @@ namespace GameZone.Servicios.Servicios_Empresa
 
         public async Task<EmpresaDTO?> ObtenerEmpresaPorId(long id)
         {
-            var EmpresaSeleccionada= await _dbContext.Empresas.FindAsync(id);
+            var EmpresaSeleccionada = await _repositorio.ObtenerEmpresaPorIdRepo(id);
             if (EmpresaSeleccionada==null)
             {
                 return null;
@@ -48,8 +50,8 @@ namespace GameZone.Servicios.Servicios_Empresa
 
         public async Task<EmpresaDTO> RegistrarEmpresa(EmpresaDTO empresaDTO)
         {
-            bool NombreRepetido= await _dbContext.Empresas.AnyAsync(ObjetoActualEmpresa => ObjetoActualEmpresa.Nombre_Empresa== empresaDTO.Nombre_EmpresaDTO);
-            bool EmailRepetido= await _dbContext.Empresas.AnyAsync(ObjetoActualEmpresa => ObjetoActualEmpresa.Email_Empresa== empresaDTO.Email_EmpresaDTO);
+            bool NombreRepetido= await _repositorio.NombreDuplicado(empresaDTO);
+            bool EmailRepetido = await _repositorio.CorreoDuplicado(empresaDTO);
 
             if (EmailRepetido && NombreRepetido)
             {
@@ -62,11 +64,11 @@ namespace GameZone.Servicios.Servicios_Empresa
 
             var EmpresaRegistrar = _mapper.Map<Empresa>(empresaDTO);
 
-            _dbContext.Empresas.Add(EmpresaRegistrar);
+            _repositorio.RegistrarEmpresaRepo(EmpresaRegistrar);
 
             try
             {
-                await _dbContext.SaveChangesAsync();
+                await _repositorio.GuardarCambiosAsyncRepo();
 
             }catch (DbUpdateException)
             {
@@ -82,7 +84,7 @@ namespace GameZone.Servicios.Servicios_Empresa
         //Login
         public async Task<string> InicioSesionEmpresa(EmpresaDTO empresaDTO)  //Recordar que un Token es un tipo string, asi que el modulo debe ser Task<string>
         {
-            var EmpresaExistente = await _dbContext.Empresas.FirstOrDefaultAsync(ObjetoActualTabla => ObjetoActualTabla.Email_Empresa== empresaDTO.Email_EmpresaDTO);
+            var EmpresaExistente = await _repositorio.InicioSesionEmpresaRepo(empresaDTO);
             if (EmpresaExistente== null) {
 
                 throw new InvalidOperationException("No se puede continuar con el proceso. Necesita registrarse");
@@ -109,7 +111,7 @@ namespace GameZone.Servicios.Servicios_Empresa
                     throw new InvalidOperationException("Los identificadores primarios no coinciden. Error inesperado");
                 }
             }
-            var EmpresaEditar = await _dbContext.Empresas.FindAsync(id);
+            var EmpresaEditar = await _repositorio.ObtenerEmpresaPorIdRepo(id);
 
             if (EmpresaEditar == null)
             {
@@ -120,7 +122,7 @@ namespace GameZone.Servicios.Servicios_Empresa
 
             try
             {
-                await _dbContext.SaveChangesAsync();
+                await _repositorio.GuardarCambiosAsyncRepo();
             }
             catch (DbUpdateException)
             {
@@ -140,18 +142,18 @@ namespace GameZone.Servicios.Servicios_Empresa
                 }
             }
 
-            var EmpresaEliminar = await _dbContext.Empresas.FindAsync(id);
+            var EmpresaEliminar = await _repositorio.ObtenerEmpresaPorIdRepo(id);
 
             if (EmpresaEliminar == null)
             {
                 throw new InvalidOperationException("El perfil no pudo ser eliminado. No existe el registro");
             }
 
-            _dbContext.Empresas.Remove(EmpresaEliminar);
+            _repositorio.EliminarPerfilEmpresaPorReferenciaRepo(EmpresaEliminar);
 
             try
             {
-                await _dbContext.SaveChangesAsync();
+                await _repositorio.GuardarCambiosAsyncRepo();
             }
             catch (DbUpdateException)
             {
